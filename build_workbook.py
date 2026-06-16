@@ -660,12 +660,20 @@ for rt in FIB_RATIOS:
                 f'{v("fib_ll","D")}+({v("fib_hh","D")}-{v("fib_ll","D")})*{rt}),"")')
 
 # --- status texts (daily) ---------------------------------------------------
+# Trend status is derived from the SAME daily EMA composite as the Trend Score
+# (price-vs-EMA +/-1, EMA-slope +/-1, each EMA guarded by a minimum-history
+# requirement). Composite "ts" ranges -8..+8 (= Trend Score / 12.5), so
+# |Trend Score| >= 50 reads as a trend; otherwise SIDEWAYS. This guarantees the
+# status can never contradict the score.
+_nD = TFD["D"][2]
+_ts = "+".join(
+    f'IF({_nD}<{per},0,IF({v("close")}>{v(em)},1,-1)+IF({v(em)}>{v(em + "_5")},1,-1))'
+    for em, per in (("ema20", 20), ("ema50", 50), ("ema100", 100), ("ema200", 200)))
 addrow("trend_status",
-       f'=IF({v("close","D")}="","-",'
-       f'IF(AND({v("close","D")}>{v("ema50","D")},{v("ema50","D")}>{v("ema200","D")}),'
-       f'IF({v("adx","D")}>=25,"STRONG UPTREND","UPTREND"),'
-       f'IF(AND({v("close","D")}<{v("ema50","D")},{v("ema50","D")}<{v("ema200","D")}),'
-       f'IF({v("adx","D")}>=25,"STRONG DOWNTREND","DOWNTREND"),"SIDEWAYS")))')
+       f'=IF({v("close")}="","-",'
+       f'IF(({_ts})>=4,IF({v("adx")}>=25,"STRONG UPTREND","UPTREND"),'
+       f'IF(({_ts})<=-4,IF({v("adx")}>=25,"STRONG DOWNTREND","DOWNTREND"),'
+       f'"SIDEWAYS")))')
 addrow("mom_status",
        f'=IF({v("rsi","D")}="","-",'
        f'IF(AND({v("rsi","D")}>=55,{v("macd_hist","D")}>0),"BULLISH",'
@@ -699,8 +707,13 @@ def score_formula(ind, tf):
     if ind == "ADX/DMI":
         return f'=IF({x("adx")}="",0,IF({x("adx")}<20,0,SIGN({x("plus_di")}-{x("minus_di")})*IF({x("adx")}>=25,2,1)))'
     if ind in ("EMA20", "EMA50", "EMA100", "EMA200"):
+        # An EMA is only classified once its timeframe has enough bars to be
+        # meaningfully warmed (else Neutral). Prevents under-warmed Weekly/
+        # Monthly EMA100/200 from inflating bullish bias.
+        period = {"EMA20": 20, "EMA50": 50, "EMA100": 100, "EMA200": 200}[ind]
+        ncell = TFD[tf][2]
         e = x(ind.lower()); e5 = x(ind.lower() + "_5"); pr = x("close")
-        return f'=IF(OR({e}="",{pr}=""),0,IF({pr}>{e},1,-1)+IF({e}>{e5},1,-1))'
+        return f'=IF(OR({e}="",{pr}="",{ncell}<{period}),0,IF({pr}>{e},1,-1)+IF({e}>{e5},1,-1))'
     if ind == "Ichimoku":
         pr, t, k = x("close"), x("tenkan"), x("kijun")
         sa, sb = x("senkouA_now"), x("senkouB_now")
@@ -1059,8 +1072,11 @@ notes = [
     "• Weekly and monthly series are resampled from your daily data inside the hidden engine (week = Mon–Fri grouping).",
     "• RSI / ATR / ADX use simple-moving-average smoothing (Cutler's method) for clean, stable spreadsheet formulas.",
     "• EMAs are seeded from the first available price and converge as history grows; supply ample history for EMA200.",
+    "• An EMA is only classified once its timeframe has enough bars (EMA20→20, 50→50, 100→100, 200→200); otherwise it",
+    "   scores Neutral, so under-warmed Weekly/Monthly EMAs cannot inflate bias.",
     "• Ichimoku cloud uses the standard 9/26/52 settings; the cloud is read 26 bars back for the price-vs-cloud signal.",
     "• Classification maps each indicator to a -2..+2 score; a horizon score (0–100) is the rescaled average of 14 indicators.",
+    "• Trend Status uses the same daily EMA composite as the Trend Score: |score| ≥ 50 ⇒ up/down trend, else SIDEWAYS.",
     "• Outlook targets/ranges are derived from horizon bias and historical volatility (±1σ scaled by horizon).",
     f"• Engine capacity: up to {DAILY_MAX:,} daily / {WEEKLY_MAX:,} weekly / {MONTHLY_MAX:,} monthly bars. Hidden engine sheets",
     "   (Calc_Daily/Weekly/Monthly, ChartData, Metrics) can be unhidden to inspect every formula.",
